@@ -36,6 +36,10 @@ architecture generation back.
 
 No dependencies beyond a C++17 standard library.
 
+**[▶ Try it in a browser](https://yomei-o.github.io/arm_emu_cpp/)** — one button runs
+Alpine's armv7 busybox, another runs that same CPython. Nothing is uploaded and the
+page is static files.
+
 ## Why 32-bit ARM is a different job from AArch64
 
 A64 is a clean field layout: four bytes per instruction, one encoding space, no
@@ -199,16 +203,17 @@ source compiles to one instruction per line and tests almost nothing.
 
 ## In a browser
 
-`web/` is the same emulator compiled to WebAssembly, in one self-contained
-`armemu.js` (the wasm is embedded), so it serves as static files — no MIME setup, no
-separate `.wasm` fetch, and it works from GitHub Pages. Enable Pages for this
-repository (Settings → Pages → deploy from `main`, `/`) and the root `index.html`
-redirects to it.
+### ▶ [Live demo](https://yomei-o.github.io/arm_emu_cpp/)
 
 Three guests on one page: the freestanding hello in both instruction sets, busybox
 (a 0.6 MB fetch), and CPython 3.12 (15 MB, decompressed by the browser's own
 `DecompressionStream` and unpacked into an in-memory filesystem). Nothing is
 uploaded. You can also drop your own 32-bit ARM ELF on it.
+
+`web/` is the same emulator compiled to WebAssembly, in one self-contained
+`armemu.js` (the wasm is embedded), so it serves as static files — no MIME setup, no
+separate `.wasm` fetch, and it works from GitHub Pages. The root `index.html` is a
+redirect, because Pages can only be pointed at the repository root or at `/docs`.
 
 ```console
 $ sh web/build.sh          # needs emscripten

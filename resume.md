@@ -12,8 +12,9 @@ Working notes for picking the project back up. The README says what the emulator
     sh tests/run_python.sh       #  6 cases, a stock dynamically linked CPython 3.12
     sh tests/run_gcc.sh          #  4 cases, gcc compiling and the result running
     node web/test_node.mjs       #  7 cases, the same guests inside WebAssembly
+    node web/test_pages.mjs      #  6 cases, the same again from the deployed URL
 
-All five should be green (16 / 10 / 6 / 4 / 7). They are the whole quality argument, and
+All six should be green (16 / 10 / 6 / 4 / 7 / 6). They are the whole quality argument, and
 they are differential rather than expectational: the host computes the same answers
 from the same sources, so "the emulator is right" means "it produced the host's
 bytes".
@@ -39,9 +40,17 @@ out at exactly 80,000; and gcc 13 forking cc1, as and ld and producing a binary 
 runs under the same interpreter. About 490 million instructions for the CPython
 digest case.
 
-And in a browser tab: `web/` is the same emulator as WebAssembly, running the
-freestanding tests in both instruction sets, busybox, and that same CPython -- four
-guest pthreads and all, on one wasm instance with no SharedArrayBuffer.
+And in a browser tab, at <https://yomei-o.github.io/arm_emu_cpp/>: `web/` is the same
+emulator as WebAssembly, running the freestanding tests in both instruction sets,
+busybox, and that same CPython -- four guest pthreads and all, on one wasm instance
+with no SharedArrayBuffer.
+
+`web/test_pages.mjs` checks the *deployed* page rather than the local build: it
+fetches `armemu.js` and both tarballs from the live URL and puts them through the
+exact code path `index.html` uses. That is what catches the failures a static
+deployment actually has -- a missing asset, or a server that sets
+`Content-Encoding: gzip` on a `.tar.gz`, which makes `fetch` decompress it and
+`DecompressionStream` then choke on plain bytes.
 
 What is left is breadth: NEON, and glibc/ARMv6 guests.
 
