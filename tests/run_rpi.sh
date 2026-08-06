@@ -108,7 +108,11 @@ static uint64_t fnv(const void* p, int n) {
     for (int i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }
     return h;
 }
-#define SHOW(tag, buf) printf("%-10s %016llx\n", tag, (unsigned long long)fnv(buf, sizeof buf))
+#define SHOW(tag, buf) printf("%-12s %016llx\n", tag, (unsigned long long)fnv(buf, sizeof buf))
+volatile int32_t k32 = 37;
+volatile int16_t k16 = -13;
+volatile float   kf  = 1.75f;
+static uint8_t  cb2[512];
 int main(void) {
     for (int i = 0; i < N; i++) {
         ai[i] = i * 7919 - 100000; bi[i] = (i * 31) % 251 - 125;
@@ -141,9 +145,26 @@ int main(void) {
       printf("%-10s %016llx\n", "u8 sad", (unsigned long long)s); }
     for (int i = 0; i < N; i++) cf[i] = (float)ai[i] * 0.25f;              SHOW("i32->f32", cf);
     for (int i = 0; i < N; i++) ci[i] = (int32_t)(af[i] * 4.0f);           SHOW("f32->i32", ci);
+    { int32_t k = k32; for (int i = 0; i < N; i++) ci[i] = ai[i] * k; }        SHOW("i32 mul-k", ci);
+    { int16_t k = k16; for (int i = 0; i < N; i++) ch[i] = (int16_t)(ah[i] * k); } SHOW("s16 mul-k", ch);
+    { float k = kf;  for (int i = 0; i < N; i++) cf[i] = af[i] * k; }          SHOW("f32 mul-k", cf);
+    { int32_t k = k32; for (int i = 0; i < N; i++) ci[i] += ah[i] * k; }       SHOW("i32 mla-k", ci);
+    /* narrowing with saturation */
+    for (int i = 0; i < N; i++) {
+        int32_t v = ai[i] >> 4;
+        ch[i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+    }                                                                          SHOW("s32->s16 q", ch);
+    for (int i = 0; i < N; i++) {
+        int32_t v = ai[i] >> 4;
+        cb[i] = (uint8_t)(v > 255 ? 255 : (v < 0 ? 0 : v));
+    }                                                                          SHOW("s32->u8 q", cb);
+    /* interleaved load/store: VLD2/VST2 shapes */
+    for (int i = 0; i < N / 2; i++) { ci[i * 2] = ai[i]; ci[i * 2 + 1] = ai[N / 2 + i]; }
+                                                                               SHOW("interleave", ci);
+    /* byte reverse and table-ish gather */
+    for (int i = 0; i < N; i++) cb[i] = ab[N - 1 - i];                          SHOW("reverse", cb);
     return 0;
 }
-
 PROG
 rm -f $ROOT/vecn $ROOT/vecs
 run /usr/bin/gcc-12 -O3 -march=armv7-a+neon -mfpu=neon -ftree-vectorize /vec.c -o /vecn > /dev/null

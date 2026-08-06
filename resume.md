@@ -243,6 +243,12 @@ bugs it found on its first run were all silent:
 - **VMOVL halved its element size.** `imm6` already names the source element, so
   deriving a "narrower" one from it widened bytes where halfwords were asked for.
 
+- **The four-register VLD2/VST2 moved half its data.** `vst2.32 {d16-d19}` is two
+  ordinary VST2s back to back -- a second *pass* over the register list, not a wider
+  one -- so treating it as one pass wrote the right bytes to the right addresses and
+  simply stopped early. Found by a loop that interleaves two arrays, which is the
+  only shape gcc emits it for.
+
 And one from the same session in VFP: the **fixed-point VCVT** was refused. Its
 immediate is not the fraction width -- it is that width subtracted from the container
 size, which is why the encoding reads as a large number for a small scale.

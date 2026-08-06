@@ -95,10 +95,14 @@ bool Cpu::exec_neon_ldst(uint32_t insn) {
     if (!single) {                                       // VLDn / VSTn (multiple structures)
         const unsigned size = (insn >> 6) & 3;
         const unsigned esize = 1u << size;
-        // The `type` field says how many registers and with what interleave. Only
-        // the un-interleaved forms (VLD1/VST1) and the two-way interleave are used
-        // by the guests here; the rest are refused rather than guessed at.
-        unsigned regs, step, n;
+        // The `type` field says how many registers, with what stride, and how many
+        // members each structure has. Three numbers, and the third one -- how many
+        // *passes* over the register list -- exists only for the four-register VLD2,
+        // which is two ordinary VLD2s back to back. Treating it as one pass moves
+        // half the data and leaves the other half of the registers untouched, which
+        // is a store that writes the right bytes to the right place and simply stops
+        // early.
+        unsigned regs, step, n, passes = 1;
         switch (type) {
             case 0x7: regs = 1; step = 1; n = 1; break;   // VLD1, one register
             case 0xA: regs = 2; step = 1; n = 1; break;   // VLD1, two registers
@@ -106,7 +110,7 @@ bool Cpu::exec_neon_ldst(uint32_t insn) {
             case 0x2: regs = 4; step = 1; n = 1; break;   // VLD1, four registers
             case 0x8: regs = 2; step = 1; n = 2; break;   // VLD2
             case 0x9: regs = 2; step = 2; n = 2; break;   // VLD2, stride 2
-            case 0x3: regs = 4; step = 2; n = 2; break;   // VLD2, four registers
+            case 0x3: regs = 4; step = 2; n = 2; passes = 2; break;   // VLD2, four registers
             case 0x4: regs = 3; step = 1; n = 3; break;   // VLD3
             case 0x5: regs = 3; step = 2; n = 3; break;
             case 0x0: regs = 4; step = 1; n = 4; break;   // VLD4
@@ -129,25 +133,29 @@ bool Cpu::exec_neon_ldst(uint32_t insn) {
             }
             bytes = regs * 8;
         } else {
-            // Interleaved: element j of structure i goes to register j, lane i.
+            // Interleaved: member j of structure i lives in register j, lane i. The
+            // outer `pass` walks the register list a second time for the
+            // four-register VLD2, whose second pair follows the first.
             const unsigned lanes = 8 / esize;
-            for (unsigned i = 0; i < lanes; ++i) {
-                for (unsigned j = 0; j < n; ++j) {
-                    const unsigned rd = (vd + j * step) & 31;
-                    if (load) {
-                        uint64_t val = 0;
-                        for (unsigned k = 0; k < esize; ++k)
-                            val |= static_cast<uint64_t>(mem_.read<uint8_t>(addr + k)) << (k * 8);
-                        set_lane(&d[rd], esize, i, val);
-                    } else {
-                        const uint64_t val = get_lane(d[rd], esize, i);
-                        for (unsigned k = 0; k < esize; ++k)
-                            mem_.write<uint8_t>(addr + k, static_cast<uint8_t>(val >> (k * 8)));
+            for (unsigned p = 0; p < passes; ++p) {
+                for (unsigned i = 0; i < lanes; ++i) {
+                    for (unsigned j = 0; j < n; ++j) {
+                        const unsigned rd = (vd + p + j * step) & 31;
+                        if (load) {
+                            uint64_t val = 0;
+                            for (unsigned k = 0; k < esize; ++k)
+                                val |= static_cast<uint64_t>(mem_.read<uint8_t>(addr + k)) << (k * 8);
+                            set_lane(&d[rd], esize, i, val);
+                        } else {
+                            const uint64_t val = get_lane(d[rd], esize, i);
+                            for (unsigned k = 0; k < esize; ++k)
+                                mem_.write<uint8_t>(addr + k, static_cast<uint8_t>(val >> (k * 8)));
+                        }
+                        addr += esize;
                     }
-                    addr += esize;
                 }
             }
-            bytes = lanes * n * esize;
+            bytes = passes * lanes * n * esize;
             (void)regs;
         }
     } else {
