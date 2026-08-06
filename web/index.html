@@ -1,0 +1,208 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>arm_emu_cpp — a 32-bit ARM emulator in a browser tab</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0 auto; padding: 1.5rem 1.25rem 4rem; max-width: 52rem;
+         font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  .sub { opacity: .7; margin: 0 0 1.5rem; }
+  code, pre, input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .row { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; align-items: center; }
+  button { font: inherit; padding: .45rem .9rem; border-radius: .4rem; cursor: pointer;
+           border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+           background: color-mix(in srgb, currentColor 6%, transparent); color: inherit; }
+  button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 14%, transparent); }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=text] { flex: 1 1 22rem; min-width: 14rem; font-size: 13px; padding: .45rem .6rem;
+                     border-radius: .4rem; color: inherit; background: transparent;
+                     border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+  pre { white-space: pre-wrap; word-break: break-word; padding: .9rem 1rem; border-radius: .5rem;
+        background: color-mix(in srgb, currentColor 7%, transparent); min-height: 6rem;
+        max-height: 28rem; overflow: auto; font-size: 13px; margin: .5rem 0 0; }
+  .status { opacity: .7; font-size: 13px; min-height: 1.4em; }
+  .drop { margin-top: 1.5rem; padding: 1.5rem; text-align: center; border-radius: .5rem;
+          border: 1.5px dashed color-mix(in srgb, currentColor 32%, transparent); opacity: .75; }
+  .drop.over { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
+  h2 { font-size: 1.05rem; margin: 2rem 0 .25rem; }
+  p.note { opacity: .75; font-size: 13.5px; }
+  a { color: inherit; }
+</style>
+
+<h1>arm_emu_cpp</h1>
+<p class="sub">A 32-bit ARM Linux emulator — A32 and Thumb-2 — compiled to WebAssembly.
+Everything below runs in this tab. Nothing is uploaded.</p>
+
+<h2>A freestanding ELF</h2>
+<p class="note">Two builds of one source: one in ARM state, one in Thumb. They are
+different instruction sets encoding the same program.</p>
+<div class="row">
+  <button id="b-arm" disabled>hello (ARM)</button>
+  <button id="b-thumb" disabled>hello (Thumb)</button>
+</div>
+
+<h2>busybox</h2>
+<p class="note">Alpine's static <code>armv7</code> busybox, Thumb-2 end to end — a
+binary that has never heard of this emulator. A 0.6 MB fetch.</p>
+<div class="row">
+  <button id="b-bb" disabled>load busybox</button>
+  <input type="text" id="bb-cmd" value="sha256sum /bin/busybox" spellcheck="false">
+  <button id="b-bb-run" disabled>run</button>
+</div>
+
+<h2>CPython 3.12, dynamically linked</h2>
+<p class="note">A stock <code>armv7</code> build of CPython, with its own
+<code>ld-musl-armhf.so.1</code> doing every relocation — so what runs is the real
+loader, not a stand-in. A 15 MB fetch, decompressed by the browser's own
+<code>DecompressionStream</code>.</p>
+<div class="row">
+  <button id="b-py" disabled>load CPython</button>
+  <input type="text" id="py-cmd" spellcheck="false"
+         value="import sys,platform,hashlib;print(sys.version.split()[0],platform.machine());print(hashlib.sha256(b'arm_emu_cpp').hexdigest())">
+  <button id="b-py-run" disabled>run</button>
+</div>
+
+<div class="status" id="status"></div>
+<pre id="out"></pre>
+
+<div class="drop" id="drop">…or drop your own 32-bit ARM ELF here.</div>
+
+<script src="armemu.js"></script>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const out = $('out'), status = $('status');
+const dec = new TextDecoder();
+let pending = '';
+
+globalThis.armemuOutput = (fd, bytes) => { pending += dec.decode(bytes, { stream: true }); };
+globalThis.armemuLog = (s) => { status.textContent = s; };
+
+const say = (s) => { status.textContent = s; };
+const show = (s) => { out.textContent += s; out.scrollTop = out.scrollHeight; };
+
+let M = null;
+(async () => {
+  say('starting WebAssembly…');
+  M = await createArmEmu();
+  for (const id of ['b-arm', 'b-thumb', 'b-bb', 'b-py']) $(id).disabled = false;
+  say('ready.');
+})();
+
+const mkdirp = (p) => {
+  let acc = '';
+  for (const part of p.split('/').filter(Boolean)) { acc += '/' + part; try { M.FS.mkdir(acc); } catch {} }
+};
+const write = (path, bytes) => {
+  mkdirp(path.split('/').slice(0, -1).join('/'));
+  M.FS.writeFile(path, bytes);
+};
+const cstr = (s) => {
+  const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n);
+  M.stringToUTF8(s, p, n);
+  return p;
+};
+
+// argv is a NUL-separated, double-NUL-terminated block: the C side needs no parser.
+function run(guestPath, args) {
+  pending = '';
+  const t0 = performance.now();
+  const pp = cstr([guestPath, ...args].join('\0') + '\0\0');
+  const cp = cstr(guestPath), rp = cstr('');
+  let rc;
+  try { rc = M._emu_run(cp, pp, rp, 0); }
+  finally { M._free(pp); M._free(cp); M._free(rp); }
+  const ms = performance.now() - t0;
+  const n = M._emu_instructions();
+  show(pending);
+  if (rc !== 0) show('\n[emulator] ' + M.UTF8ToString(M._emu_error()) + '\n');
+  say(`${n.toLocaleString()} instructions in ${ms.toFixed(0)} ms` +
+      ` (${(n / ms / 1000).toFixed(1)}M/s)`);
+}
+
+// A .tar.gz straight into MEMFS. DecompressionStream is the browser's own gzip, so
+// there is no library here; the tar walk is twenty lines because tar is that simple.
+async function fetchTar(url, onProgress) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  const buf = new Uint8Array(await new Response(
+    res.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  const td = new TextDecoder();
+  let off = 0, files = 0;
+  while (off + 512 <= buf.length) {
+    const hdr = buf.subarray(off, off + 512);
+    if (hdr[0] === 0) break;
+    let name = td.decode(hdr.subarray(0, 100)).replace(/\0.*$/, '');
+    const prefix = td.decode(hdr.subarray(345, 500)).replace(/\0.*$/, '');
+    if (prefix) name = prefix + '/' + name;
+    const size = parseInt(td.decode(hdr.subarray(124, 136)).replace(/[\0 ]/g, ''), 8) || 0;
+    const type = String.fromCharCode(hdr[156]);
+    off += 512;
+    if (name.startsWith('./')) name = name.slice(2);
+    if (type === '5') mkdirp(name);
+    else if (type === '0' || type === '\0' || type === '') {
+      write('/' + name, buf.subarray(off, off + size));
+      if (++files % 200 === 0) onProgress?.(files);
+    }
+    off += Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
+
+// ---- the freestanding ELFs, fetched as raw files
+async function loadHello(which) {
+  const res = await fetch(`hello.${which}`);
+  if (!res.ok) { show(`\n[page] hello.${which} is not deployed here\n`); return; }
+  write(`/hello.${which}`, new Uint8Array(await res.arrayBuffer()));
+  run(`/hello.${which}`, []);
+}
+$('b-arm').onclick = () => loadHello('elf');
+$('b-thumb').onclick = () => loadHello('telf');
+
+// ---- busybox
+$('b-bb').onclick = async (e) => {
+  e.target.disabled = true;
+  say('fetching busybox…');
+  try {
+    await fetchTar('linux-guests.tar.gz');
+    // The tarball holds it at the top level; the guest expects a path.
+    mkdirp('bin');
+    M.FS.writeFile('/bin/busybox', M.FS.readFile('/busybox'));
+    say('busybox ready.');
+    $('b-bb-run').disabled = false;
+  } catch (err) { say(String(err)); e.target.disabled = false; }
+};
+$('b-bb-run').onclick = () => {
+  const args = $('bb-cmd').value.trim().split(/\s+/).filter(Boolean);
+  show(`\n$ busybox ${args.join(' ')}\n`);
+  run('/bin/busybox', args);
+};
+
+// ---- CPython
+$('b-py').onclick = async (e) => {
+  e.target.disabled = true;
+  say('fetching CPython (15 MB)…');
+  try {
+    await fetchTar('cpython-armv7.tar.gz', (n) => say(`unpacking… ${n} files`));
+    say('CPython ready.');
+    $('b-py-run').disabled = false;
+  } catch (err) { say(String(err)); e.target.disabled = false; }
+};
+$('b-py-run').onclick = () => {
+  show('\n$ python3 -c …\n');
+  run('/usr/bin/python3', ['-c', $('py-cmd').value]);
+};
+
+// ---- drop your own
+const drop = $('drop');
+drop.addEventListener('dragover', (ev) => { ev.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', async (ev) => {
+  ev.preventDefault();
+  drop.classList.remove('over');
+  for (const f of ev.dataTransfer.files) {
+    write('/' + f.name, new Uint8Array(await f.arrayBuffer()));
+    show(`\n$ ./${f.name}\n`);
+    run('/' + f.name, []);
+  }
+});
+</script>

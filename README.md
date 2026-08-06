@@ -107,8 +107,8 @@ That is a scan loop in musl's `strtod` that never terminates.
 | **Dynamic linking** — the real `ld-musl-armhf.so.1` loads and relocates | ✅ |
 | **A stock CPython 3.12 for 32-bit ARM**, with threads and `subprocess` | ✅ |
 | **gcc 13 for armv7** — compiles, assembles and links, and the result runs here | ✅ |
+| **WebAssembly** — the same guests, in a browser tab | ✅ |
 | Advanced SIMD (NEON) | grown by demand: load/store, the three-same group, the immediates, shifts, the two-register misc group |
-| WebAssembly | ⏳ |
 
 ## Correctness is a diff, not an opinion
 
@@ -196,6 +196,43 @@ The arithmetic test is deliberately written in 64-bit types. A 32-bit ARM has no
 `UMULL`/`MLA`, a shift built from two shifts and an `ORR` — and each of those depends
 on the carry flag being exactly what the architecture says. On AArch64 the same
 source compiles to one instruction per line and tests almost nothing.
+
+## In a browser
+
+`web/` is the same emulator compiled to WebAssembly, in one self-contained
+`armemu.js` (the wasm is embedded), so it serves as static files — no MIME setup, no
+separate `.wasm` fetch, and it works from GitHub Pages. Enable Pages for this
+repository (Settings → Pages → deploy from `main`, `/`) and the root `index.html`
+redirects to it.
+
+Three guests on one page: the freestanding hello in both instruction sets, busybox
+(a 0.6 MB fetch), and CPython 3.12 (15 MB, decompressed by the browser's own
+`DecompressionStream` and unpacked into an in-memory filesystem). Nothing is
+uploaded. You can also drop your own 32-bit ARM ELF on it.
+
+```console
+$ sh web/build.sh          # needs emscripten
+$ node web/test_node.mjs
+ok   wasm: hello (arm)
+ok   wasm: hello (thumb)
+ok   wasm: busybox echo
+ok   wasm: busybox uname
+ok   wasm: busybox sha256sum
+ok   wasm: cpython
+ok   wasm: cpython threading
+7 passed, 0 failed
+```
+
+Those last two are CPython 3.12 for 32-bit ARM, dynamically linked, running inside
+WebAssembly — three architectures deep, and the `sha256sum` above it still agrees
+with the host's.
+
+The threading one is worth a second look: four guest `pthread`s, a real mutex, 8000
+increments, and the count comes out exactly right — **without WebAssembly threads**.
+There is one wasm instance, so no `SharedArrayBuffer`, no cross-origin isolation, and
+no COOP/COEP headers — which static hosting cannot set anyway. The guest's threads
+are interleaved by the emulator's own scheduler, and from inside the guest that is
+indistinguishable from a single-core machine.
 
 ## Building
 

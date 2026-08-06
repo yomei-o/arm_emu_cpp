@@ -11,8 +11,9 @@ Working notes for picking the project back up. The README says what the emulator
     sh tests/run_busybox.sh      # 10 cases, against the host's own md5sum/sha256sum
     sh tests/run_python.sh       #  6 cases, a stock dynamically linked CPython 3.12
     sh tests/run_gcc.sh          #  4 cases, gcc compiling and the result running
+    node web/test_node.mjs       #  7 cases, the same guests inside WebAssembly
 
-All four should be green (16 / 10 / 6 / 4). They are the whole quality argument, and
+All five should be green (16 / 10 / 6 / 4 / 7). They are the whole quality argument, and
 they are differential rather than expectational: the host computes the same answers
 from the same sources, so "the emulator is right" means "it produced the host's
 bytes".
@@ -21,8 +22,8 @@ bytes".
 compiled by the first and run by neither — on an x86 host and in a browser tab. That
 is the same shape the AArch64 sibling reached, one architecture generation back.
 
-**Where this is (2026-08-06, first pass).** The goal it was aimed at is met, except
-for the browser:
+**Where this is (2026-08-06, first pass).** The goal it was aimed at is met:
+
 
     ./armemu --root guests/sysroot /usr/bin/python3 \
         -c "import sys, platform; print(sys.version.split()[0], platform.machine())"
@@ -38,7 +39,11 @@ out at exactly 80,000; and gcc 13 forking cc1, as and ld and producing a binary 
 runs under the same interpreter. About 490 million instructions for the CPython
 digest case.
 
-What is left is **WebAssembly**, and breadth in NEON.
+And in a browser tab: `web/` is the same emulator as WebAssembly, running the
+freestanding tests in both instruction sets, busybox, and that same CPython -- four
+guest pthreads and all, on one wasm instance with no SharedArrayBuffer.
+
+What is left is breadth: NEON, and glibc/ARMv6 guests.
 
 ## Bugs from this stretch worth not rediscovering
 
@@ -149,22 +154,13 @@ manoeuvre in question.
 
 ## ⏭ Next, in order
 
-1. **WebAssembly.** The last piece of the original goal. `web/wasm_api.cpp` and
-   `web/build.sh` in the AArch64 sibling are close to directly portable; the only
-   guest-visible difference is that there is no host filesystem, so the guest tree is
-   unpacked into emscripten's in-memory FS and the `Files` layer works unchanged
-   because `fopen` on a MEMFS path behaves like `fopen` anywhere else. The guest to
-   ship first is busybox (880 KB) and then the CPython sysroot (~60 MB, which the
-   sibling serves as a compressed tarball the page decompresses with
-   `DecompressionStream`).
-
-2. **Raspberry Pi OS's own binaries**, as opposed to Alpine's. Those are glibc and
+1. **Raspberry Pi OS's own binaries**, as opposed to Alpine's. Those are glibc and
    ARMv6, which exercises two things musl and ARMv7 do not: glibc's IFUNC resolvers
    pick string routines from AT_HWCAP (so the HWCAP word in `elf_loader.cpp` becomes
    load-bearing rather than decorative), and ARMv6 code reaches the kernel helper page
    for its atomics instead of using LDREX/STREX directly.
 
-3. **Speed.** ~490 M instructions for the CPython digest case, which is a few tens of
+2. **Speed.** ~490 M instructions for the CPython digest case, which is a few tens of
    seconds. A decode cache keyed on the PC is the standing idea; measure first.
 
 ## Also still open
