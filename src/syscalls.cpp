@@ -142,6 +142,11 @@ bool Syscalls::svc(uint32_t imm) {
             break;
         }
         case 220: r = 0; break;                                    // madvise
+        // arm_fadvise64_64. A hint about access patterns, and ARM gives it its own
+        // number because the 64-bit arguments would not fit the generic one. Nothing
+        // here caches, so "noted" is the whole of the correct implementation --
+        // glibc's `posix_fadvise` is what calls it, from coreutils' read loop.
+        case 270: r = 0; break;
         case 219: r = 0; break;                                    // mincore
         case 150: case 151: case 152: case 153: r = 0; break;      // mlock family
 
@@ -158,9 +163,36 @@ bool Syscalls::svc(uint32_t imm) {
         // concurrent, so every barrier is already satisfied and 0 is the truth
         // rather than a stub.
         case 389: r = 0; break;
-        case 241: case 242: r = 0; break;                          // sched_[gs]etaffinity
+        case 241: r = 0; break;                                    // sched_setaffinity
+        case 242: {                                                // sched_getaffinity
+            // The mask has to come back with a CPU in it and the *size* has to be
+            // returned, not zero: `sysconf(_SC_NPROCESSORS_ONLN)` counts the bits,
+            // and an empty answer makes a guest believe it is running on a machine
+            // with no processors. CPython then reports `os.cpu_count()` as None and
+            // anything that sizes a thread pool from it makes a pool of zero.
+            const uint32_t len = a1 < 4 ? a1 : 4;
+            if (a2 && len) {
+                mem_.set(a2, 0, a1);
+                mem_.write<uint8_t>(a2, 1);                        // one CPU, number 0
+            }
+            r = static_cast<int64_t>(len ? len : 4);
+            break;
+        }
         case 156: case 157: r = 0; break;                          // sched_[gs]etscheduler
-        case 398: r = kENOSYS; break;                              // rseq: glibc falls back
+        case 345: {                                                // getcpu
+            if (a0) mem_.write<uint32_t>(a0, 0);
+            if (a1) mem_.write<uint32_t>(a1, 0);
+            r = 0;
+            break;
+        }
+        // Deliberately refused, one line each, so they do not reach the "unimplemented"
+        // report at the bottom and print a warning into the guest's own output. Every
+        // one of these has a documented fallback that a libc takes on ENOSYS:
+        //   398 rseq          glibc registers it if present and works without it
+        //   435 clone3        glibc 2.34+ tries it first and falls back to clone
+        //   439 faccessat2    handled above; listed here for the reader
+        //   403 clock_gettime64 is answered, not refused -- see the time group
+        case 398: case 435: r = kENOSYS; break;
 
         // ---- files -------------------------------------------------------------
         case 3: r = sys_read(static_cast<int>(a0), a1, a2); break;

@@ -75,3 +75,27 @@ Alpine it is a symlink to `/lib/ld-musl-armhf.so.1`, and without it `-lc` finds
 the link order, and `gcc hello.c` then fails with "undefined reference to `raise`"
 from libgcc's division-by-zero handler, which is a real hazard of static musl links
 and nothing to do with the emulator. `fixup.sh` puts it in place.
+
+## rpi — Raspberry Pi OS's own glibc, CPython 3.11 and gcc 12, ~250 MB
+
+```sh
+sh guests/fetch_rpi.sh          # ~44 MB of .debs from raspbian.raspberrypi.com
+```
+
+Then `sh tests/run_rpi.sh`. This is the guest the project was aimed at, and it is
+not the Alpine tree with different filenames — it differs in the two ways that
+actually reach the interpreter:
+
+* **glibc, not musl.** glibc's ARM string routines *are* the parallel
+  add/subtract instructions: `uqsub8` against a register of zeros leaves a
+  non-zero byte exactly where the input had one, and `sel` picks the lane out of
+  the GE flags. The two only work as a pair, and only the non-saturating forms
+  write GE.
+* **Raspbian is rebuilt for the original Pi**, so it does not assume the ARMv7
+  instructions the Alpine tree uses freely.
+
+The download is `.deb`s rather than `.apk`s, so `guests/deb_unpack.py` does the
+unpacking: Windows `tar` cannot create a symbolic link and *fails the whole
+extraction* when a package ships one, and a link made on a Windows drive reads back
+as EINVAL from a native process anyway. The unpacker resolves every link to a copy,
+across packages, which is what the guest's dynamic loader actually needs.

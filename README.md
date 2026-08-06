@@ -16,9 +16,9 @@ $ ./armemu --root guests/sysroot /usr/bin/python3 -c \
 3.12.13 armv7l
 19f71e020a40ca0392b462d436581a76685cd81246a8e507008e368d9d009a5c
 
-$ ./armemu --root guests/gccroot /usr/bin/gcc /hello.c -o /hello
-$ ./armemu --root guests/gccroot /hello
-hello from emulated gcc
+$ ./armemu --root guests/rpi /usr/bin/gcc-12 /hello.c -o /hello
+$ ./armemu --root guests/rpi /hello
+hello from raspberry pi gcc
 ```
 
 That CPython is a stock `armv7` build, **dynamically linked**: the emulator maps the
@@ -26,10 +26,10 @@ program and its interpreter the way the kernel does and starts at the interprete
 entry, and the real musl `ld.so` does every relocation itself. The digest is the
 host's digest of the same bytes.
 
-And the `gcc` line is the whole toolchain running *inside* the emulator — the driver
-forks and execs cc1, as and ld, four child processes with pipes and temporary files
-between them — after which **the binary it produced runs under the same emulator that
-built it**.
+And that `gcc-12` is Raspberry Pi OS's own, out of Raspbian's `.deb`s: the whole
+toolchain running *inside* the emulator — the driver forks and execs cc1, as and ld,
+four child processes with pipes and temporary files between them — after which **the
+binary it produced runs under the same emulator that built it**.
 
 Sibling of [aarch64_emu_cpp](https://github.com/yomei-o/aarch64_emu_cpp), pointed one
 architecture generation back.
@@ -98,6 +98,7 @@ That is a scan loop in musl's `strtod` that never terminates.
 | Branches, `BX`/`BLX` and interworking in both directions | ✅ |
 | The exclusive monitor: `LDREX`/`STREX` and the byte, halfword and doubleword forms | ✅ |
 | Media instructions: bitfield, saturating, packing, extends, `REV`/`RBIT`/`CLZ` | ✅ |
+| The ARMv6 parallel add/subtract group and the GE flags, with `SEL` | ✅ |
 | **Thumb and Thumb-2**, 16- and 32-bit encodings, IT blocks, `TBB`/`TBH` | ✅ |
 | **VFPv3/v4** — the hard-float ABI's arithmetic, compares, conversions, `VMRS` | ✅ |
 | The **kernel helper page** at `0xFFFF0000`, as real ARM code | ✅ |
@@ -111,6 +112,7 @@ That is a scan loop in musl's `strtod` that never terminates.
 | **Dynamic linking** — the real `ld-musl-armhf.so.1` loads and relocates | ✅ |
 | **A stock CPython 3.12 for 32-bit ARM**, with threads and `subprocess` | ✅ |
 | **gcc 13 for armv7** — compiles, assembles and links, and the result runs here | ✅ |
+| **Raspberry Pi OS's own tree** — glibc 2.36, CPython 3.11, gcc 12 | ✅ |
 | **WebAssembly** — the same guests, in a browser tab | ✅ |
 | Advanced SIMD (NEON) | grown by demand: load/store, the three-same group, the immediates, shifts, the two-register misc group |
 
@@ -142,11 +144,17 @@ ok   arm   interwork
 ok   thumb interwork
 ok   arm   mem
 ok   thumb mem
-16 passed, 0 failed
+ok   arm   parallel
+ok   thumb parallel
+18 passed, 0 failed
 ```
 
-`interwork` is the one worth a second look: two mutually recursive functions, one
+Two are worth a second look. `interwork` is two mutually recursive functions, one
 forced into ARM state and one into Thumb, so every call and every return crosses.
+`parallel` is the ARMv6 SIMD-within-a-register group together with the GE flags it
+writes and the `sel` that reads them — the pair glibc's string routines are made of,
+where only the *non*-saturating forms touch GE and a test that compared results alone
+would pass with GE left over from something else.
 
 A second suite runs a **real** guest against the host's own tools:
 
@@ -188,7 +196,25 @@ ok   gcc output runs under the emulator
 ok   gcc -S produces assembly
 ok   gcc -mthumb output runs
 4 passed, 0 failed
+
+$ sh tests/run_rpi.sh
+ok   rpi coreutils echo
+ok   rpi coreutils sha256sum (against the host's)
+ok   rpi coreutils wc -l
+ok   rpi python version and machine
+ok   rpi python sha256 (against the host's)
+ok   rpi gcc compiles and links
+ok   rpi gcc output runs under the emulator
+ok   rpi gcc -mthumb (Thumb-2) output runs
+8 passed, 0 failed
 ```
+
+`run_rpi.sh` is Raspberry Pi OS's own tree — glibc 2.36, CPython 3.11, gcc 12, out of
+Raspbian's `.deb`s. It is not the Alpine suite with different filenames: glibc's ARM
+string routines *are* the parallel add/subtract instructions, which musl never uses.
+`uqsub8` against a register of zeros leaves a non-zero byte exactly where the input
+had one, and `sel` picks the lane out of the GE flags — a pair that only works if
+both halves are right, and if only the non-saturating forms write GE.
 
 `python threading` is four threads on one lock, 80,000 increments, and the count
 comes out exactly right — which it does only if the exclusive monitor is real. An

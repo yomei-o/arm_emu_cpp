@@ -699,6 +699,20 @@ void Cpu::t32_dp_register(uint32_t insn) {
         r[rd] = val;
         return;
     }
+    // A6.3.13 Parallel addition and subtraction. Thumb numbers the six operations
+    // differently from A32 -- 000 ADD8, 001 ADD16, 010 ASX, 100 SUB8, 101 SUB16,
+    // 110 SAX -- so the table maps its op1 onto the shared executor's enum rather
+    // than the other way round.
+    if ((op1 & 8) && (op2 & 8) == 0) {
+        static const int kOp[8] = {kPAdd8, kPAdd16, kPAsx, -1, kPSub8, kPSub16, kPSax, -1};
+        const int mapped = kOp[op1 & 7];
+        const unsigned variant = op2 & 3;                 // 00 plain, 01 Q, 10 H
+        if (mapped < 0 || variant == 3) { undefined(insn); return; }
+        static const unsigned kKind[3] = {kPPlain, kPSat, kPHalve};
+        parallel_add_sub(static_cast<unsigned>(mapped), kKind[variant],
+                         (op2 & 4) != 0, rd, reg(rn), reg(rm));
+        return;
+    }
     if ((op1 & 0xC) == 0x8 && (op2 & 0xC) == 0x8) {       // the misc group
         const uint32_t x = reg(rm);
         switch (((op1 & 3) << 2) | (op2 & 3)) {

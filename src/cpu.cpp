@@ -135,6 +135,91 @@ void Cpu::do_store(unsigned rt, uint32_t addr, unsigned size) {
     }
 }
 
+// The parallel add and subtract group: two halfwords or four bytes at a time, in a
+// general-purpose register. It exists because ARMv6 predates NEON, and it is still
+// how glibc's ARMv6 string routines work -- `uqsub8` against a register of zeros
+// leaves a non-zero byte exactly where the input had one, and `sel` then picks the
+// lane. Emulating one without the other is not useful: the pair *is* the idiom.
+//
+// Three variants, and only the first writes the GE flags:
+//
+//   plain      wrap around, and set GE per lane from whether the true result was
+//              non-negative (signed) or did not borrow / did carry (unsigned)
+//   saturating clamp to the lane's range, leave GE alone
+//   halving    shift the true result right one place, leave GE alone
+//
+// Getting "only the plain form writes GE" wrong is silent: `sel` a few instructions
+// later picks the wrong bytes and a string routine returns a length that is merely
+// somewhere else.
+void Cpu::parallel_add_sub(unsigned op, unsigned kind, bool unsig,
+                           unsigned rd, uint32_t a, uint32_t b) {
+    const bool bytes = op == kPAdd8 || op == kPSub8;
+    const unsigned lanes = bytes ? 4 : 2;
+    const unsigned bits = bytes ? 8 : 16;
+    const uint32_t mask = bytes ? 0xFFu : 0xFFFFu;
+
+    uint32_t result = 0, ge = 0;
+    for (unsigned i = 0; i < lanes; ++i) {
+        const unsigned sh = i * bits;
+        const uint32_t au = (a >> sh) & mask;
+        // The exchange forms cross the two halfwords over: ASX subtracts the *top*
+        // of Rm from the bottom of Rn and adds the bottom to the top, which is what
+        // makes complex arithmetic a single instruction.
+        unsigned bsh = sh;
+        if (op == kPAsx || op == kPSax) bsh = (i == 0) ? 16 : 0;
+        const uint32_t bu = (b >> bsh) & mask;
+        // Whether this lane adds or subtracts. For ASX the low lane subtracts and
+        // the high lane adds; SAX is the other way round.
+        bool sub;
+        switch (op) {
+            case kPAdd16: case kPAdd8: sub = false; break;
+            case kPSub16: case kPSub8: sub = true; break;
+            case kPAsx: sub = (i == 0); break;
+            default: sub = (i == 1); break;                // kPSax
+        }
+
+        const int32_t as = static_cast<int32_t>(au << (32 - bits)) >> (32 - bits);
+        const int32_t bs = static_cast<int32_t>(bu << (32 - bits)) >> (32 - bits);
+        const int64_t truth = unsig ? (sub ? static_cast<int64_t>(au) - bu
+                                           : static_cast<int64_t>(au) + bu)
+                                    : (sub ? static_cast<int64_t>(as) - bs
+                                           : static_cast<int64_t>(as) + bs);
+        uint32_t lane;
+        switch (kind) {
+            case kPSat: {
+                const int64_t hi = unsig ? static_cast<int64_t>(mask) : ((1ll << (bits - 1)) - 1);
+                const int64_t lo = unsig ? 0 : -(1ll << (bits - 1));
+                const int64_t v = truth > hi ? hi : (truth < lo ? lo : truth);
+                lane = static_cast<uint32_t>(v) & mask;
+                break;
+            }
+            case kPHalve:
+                lane = static_cast<uint32_t>(truth >> 1) & mask;
+                break;
+            default:
+                lane = static_cast<uint32_t>(truth) & mask;
+                // What "greater or equal" means here differs by signedness, and the
+                // difference is not cosmetic. Signed: the true result was
+                // non-negative. Unsigned *subtract*: the same test, which is "no
+                // borrow". Unsigned *add*: there was a carry **out** -- so an
+                // unsigned add whose result fits sets no GE bit at all, which is the
+                // opposite of what "greater or equal" reads like.
+                const bool set = unsig && !sub ? truth >= (1ll << bits) : truth >= 0;
+                // GE is set per *byte* even for the halfword forms, which is why a
+                // 16-bit lane writes two bits: SEL always works on bytes.
+                if (set) {
+                    const unsigned first = bytes ? i : i * 2;
+                    const unsigned count = bytes ? 1 : 2;
+                    for (unsigned k = 0; k < count; ++k) ge |= 1u << (first + k);
+                }
+                break;
+        }
+        result |= lane << sh;
+    }
+    if (kind == kPPlain) this->ge = ge;
+    set_reg(rd, result);
+}
+
 namespace {
 inline unsigned popcount16(uint32_t v) {
     unsigned n = 0;
@@ -651,13 +736,16 @@ void Cpu::a32_media(uint32_t insn) {
         return;
     }
 
-    if ((op1 & 0x1C) == 0) {                               // parallel add/sub, signed
-        // Not yet needed by any guest here. Refused rather than approximated.
-        undefined(insn);
-        return;
-    }
-    if ((op1 & 0x1C) == 4) {                               // parallel add/sub, unsigned
-        undefined(insn);
+    // A5.4.1 / A5.4.2 Parallel addition and subtraction. Bits 27..20 are
+    // `0110 0Uxx`: U picks signedness, the low two bits pick plain / saturating /
+    // halving, and op2 picks which of the six operations.
+    if ((op1 & 0x18) == 0) {
+        static const unsigned kOp[8] = {kPAdd16, kPAsx, kPSax, kPSub16,
+                                        kPAdd8, 0, 0, kPSub8};
+        const unsigned variant = op1 & 3;                  // 01 plain, 10 Q, 11 H
+        if (variant == 0 || op2 == 5 || op2 == 6) { undefined(insn); return; }
+        static const unsigned kKind[4] = {0, kPPlain, kPSat, kPHalve};
+        parallel_add_sub(kOp[op2], kKind[variant], (op1 & 4) != 0, rd, reg(rn), reg(rm));
         return;
     }
 

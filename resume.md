@@ -6,15 +6,16 @@ Working notes for picking the project back up. The README says what the emulator
 ## Handoff — start here
 
     sh build.sh
-    sh tests/run_tests.sh        # 16 cases: 8 sources x {ARM, Thumb}
+    sh tests/run_tests.sh        # 18 cases: 9 sources x {ARM, Thumb}
     # guests/README.md has the downloads for the three guest trees below
     sh tests/run_busybox.sh      # 10 cases, against the host's own md5sum/sha256sum
     sh tests/run_python.sh       #  6 cases, a stock dynamically linked CPython 3.12
     sh tests/run_gcc.sh          #  4 cases, gcc compiling and the result running
+    sh tests/run_rpi.sh          #  8 cases, Raspberry Pi OS's own glibc/python/gcc
     node web/test_node.mjs       #  7 cases, the same guests inside WebAssembly
     node web/test_pages.mjs      #  6 cases, the same again from the deployed URL
 
-All six should be green (16 / 10 / 6 / 4 / 7 / 6). They are the whole quality argument, and
+All seven should be green (18 / 10 / 6 / 4 / 8 / 7 / 6). They are the whole quality argument, and
 they are differential rather than expectational: the host computes the same answers
 from the same sources, so "the emulator is right" means "it produced the host's
 bytes".
@@ -52,7 +53,14 @@ deployment actually has -- a missing asset, or a server that sets
 `Content-Encoding: gzip` on a `.tar.gz`, which makes `fetch` decompress it and
 `DecompressionStream` then choke on plain bytes.
 
-What is left is breadth: NEON, and glibc/ARMv6 guests.
+Raspberry Pi OS's own tree works too -- glibc 2.36, CPython 3.11.2 and gcc 12 out of
+Raspbian's .debs -- which was the literal target:
+
+    ./armemu --root guests/rpi /usr/bin/gcc-12 /hello.c -o /hello
+    ./armemu --root guests/rpi /hello
+    hello from raspberry pi gcc
+
+What is left is breadth in NEON, and speed.
 
 ## Bugs from this stretch worth not rediscovering
 
@@ -115,6 +123,35 @@ by a crash.
   bytes* from the ones the host would: a wrong answer that looks exactly like an
   emulator bug and is not one. `main.cpp` sets all three to binary.
 
+## What the Raspberry Pi tree needed that Alpine's did not
+
+Three things, and the first is the one worth remembering.
+
+- **The parallel add/subtract group is not optional once glibc is the libc.** ARMv6
+  predates NEON, and glibc's ARM string routines still work the way ARMv6 had to:
+  `uqsub8` against a register of zeros leaves a non-zero byte exactly where the input
+  had one, and `sel` picks the lane out of the GE flags. Refusing the group stopped
+  `/bin/echo` 12,890 instructions in, inside `ld.so`'s own `strlen`. Emulating one of
+  the pair without the other would have been worse: only the *non*-saturating forms
+  write GE, so a `sel` a few instructions later picks the wrong bytes and a string
+  routine returns a length that is merely somewhere else.
+
+- **`close(1)` on a descriptor that was never redirected has to succeed.**
+  coreutils' `close_stdout` runs `fclose(stdout)` at exit and reports whatever it
+  gets, so EBADF made every one of them print "write error: Bad file descriptor"
+  *after* its correct output, and exit 1.
+
+- **`sched_getaffinity` must return the size and set a bit.** Zero reads as "a
+  machine with no processors": `sysconf(_SC_NPROCESSORS_ONLN)` counts the bits,
+  CPython reports `os.cpu_count()` as None, and anything sizing a pool from it makes
+  a pool of zero.
+
+Two gcc diagnostics on that tree are the *compiler's* limits and not the emulator's,
+and both cost a few minutes to recognise: Raspbian's gcc defaults to ARMv6, so plain
+`-mthumb` means Thumb-1 and gcc refuses it with the hard-float ABI; naming `armv7-a`
+to fix that then resets the FPU choice and fails with "selected architecture lacks an
+FPU". `-mthumb -march=armv7-a+fp` is what a Debian armhf package actually contains.
+
 ## Two habits this project runs on
 
 - **Build every test three times.** ARM, Thumb, and the host. Every bug above was
@@ -163,16 +200,18 @@ manoeuvre in question.
 
 ## ⏭ Next, in order
 
-1. **Raspberry Pi OS's own binaries**, as opposed to Alpine's. Those are glibc and
-   ARMv6, which exercises two things musl and ARMv7 do not: glibc's IFUNC resolvers
-   pick string routines from AT_HWCAP (so the HWCAP word in `elf_loader.cpp` becomes
-   load-bearing rather than decorative), and ARMv6 code reaches the kernel helper page
-   for its atomics instead of using LDREX/STREX directly.
-
-2. **Speed.** ~490 M instructions for the CPython digest case, which is a few tens of
+1. **Speed.** ~490 M instructions for the CPython digest case, which is a few tens of
    seconds. A decode cache keyed on the PC is the standing idea; measure first.
 
 ## Also still open
+
+- **`tests/parallel.c` had a bug of its own worth remembering**, because it is the
+  kind a differential test cannot catch by itself: the host build called
+  `show(name, par(...), g_ge)` where `par()` is what sets `g_ge`, and C does not
+  specify which argument is evaluated first. Half the cases printed the *previous*
+  case's flags, the two builds disagreed by one line, and the diff read as a missing
+  instruction. A reference that computes and reports in one expression is a reference
+  that can be wrong in a way the emulator cannot be.
 
 - **NEON is partial.** Implemented: the element and structure load/stores, the
   three-registers-same group, the one-register modified immediates, the shift-by-

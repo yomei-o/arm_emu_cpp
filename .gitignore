@@ -25,3 +25,6 @@ tests/*.got
 guests/*
 !guests/README.md
 !guests/fixup.sh
+!guests/fetch_rpi.sh
+!guests/deb_unpack.py
+!guests/rpi-packages.txt

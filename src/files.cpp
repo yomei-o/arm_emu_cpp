@@ -111,7 +111,11 @@ int64_t Files::open(const std::string& path, int flags, int mode) {
 
 int64_t Files::close(int fd) {
     auto it = open_.find(fd);
-    if (it == open_.end()) return kEBADF;
+    // Closing a standard stream that was never redirected here is legal and common:
+    // coreutils' `close_stdout` runs `fclose(stdout)` at exit and reports whatever it
+    // gets back. Answering EBADF made every one of them print
+    // "write error: Bad file descriptor" *after* its correct output, and exit 1.
+    if (it == open_.end()) return (fd >= 0 && fd <= 2) ? 0 : kEBADF;
     // The FILE* is closed by the last reference going away, not here: another
     // descriptor may still hold it.
     if (it->second.pipe) {

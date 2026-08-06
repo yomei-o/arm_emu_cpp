@@ -410,6 +410,16 @@ public:
     void do_load(unsigned rt, uint32_t addr, unsigned size, bool sign, bool is_signed_ldrd = false);
     void do_store(unsigned rt, uint32_t addr, unsigned size);
 
+    // The parallel (SIMD-within-a-register) add and subtract group, shared by A32's
+    // A5.4.1/A5.4.2 and Thumb's A6.3.13. Six operations, three variants each, both
+    // signednesses -- and only the plain variant writes the GE flags, which `SEL`
+    // then reads. That pairing is the whole point of the group: glibc's ARMv6
+    // `strlen` finds a zero byte with `uqsub8` and picks the lane with `sel`.
+    enum ParOp { kPAdd16, kPAsx, kPSax, kPSub16, kPAdd8, kPSub8 };
+    enum ParKind { kPPlain, kPSat, kPHalve };
+    void parallel_add_sub(unsigned op, unsigned kind, bool unsig,
+                          unsigned rd, uint32_t a, uint32_t b);
+
     // LDM/STM over a register list, shared by A32's four addressing modes, Thumb's
     // PUSH/POP and Thumb-2's LDMIA/STMDB.
     void do_ldm(unsigned rn, uint32_t list, bool inc, bool before, bool wback, bool user_regs);
