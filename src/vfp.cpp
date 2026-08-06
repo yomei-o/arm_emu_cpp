@@ -286,8 +286,40 @@ bool Cpu::exec_vfp(uint32_t insn) {
             }
             return true;
         }
+        // VCVT between floating-point and fixed-point. The operand register is also
+        // the destination, and `imm` is *not* the fraction width -- it is that width
+        // subtracted from the container size, which is why the encoding reads as a
+        // large number for a small scale. gcc emits this for `(int)(x * 4.0f)`, one
+        // instruction instead of a multiply and a convert.
+        case 0xA: case 0xB: case 0xE: case 0xF: {
+            const bool to_fixed = (opc2 & 4) != 0;
+            const bool unsig = (opc2 & 1) != 0;
+            const bool wide = (insn >> 7) & 1;            // sx: 32-bit container, else 16
+            const unsigned imm = ((insn & 0xF) << 1) | ((insn >> 5) & 1);
+            const unsigned bits = wide ? 32 : 16;
+            const double scale = std::pow(2.0, static_cast<double>(bits) - imm);
+            if (to_fixed) {
+                double v = std::trunc(getd() * scale);    // this conversion rounds to zero
+                const double hi = unsig ? (wide ? 4294967295.0 : 65535.0)
+                                        : (wide ? 2147483647.0 : 32767.0);
+                const double lo = unsig ? 0.0 : (wide ? -2147483648.0 : -32768.0);
+                if (!(v >= lo)) v = lo;
+                if (!(v <= hi)) v = hi;
+                const uint32_t raw = unsig ? static_cast<uint32_t>(v)
+                                           : static_cast<uint32_t>(static_cast<int32_t>(v));
+                const uint32_t stored = wide ? raw : (raw & 0xFFFF);
+                if (dp) d[vd] = stored; else s_set(vd, stored);
+            } else {
+                const uint32_t raw = dp ? static_cast<uint32_t>(d[vd]) : s_get(vd);
+                int64_t iv;
+                if (unsig) iv = wide ? raw : (raw & 0xFFFF);
+                else iv = wide ? static_cast<int32_t>(raw)
+                               : static_cast<int16_t>(static_cast<uint16_t>(raw));
+                put(static_cast<double>(iv) / scale);
+            }
+            return true;
+        }
         case 0x2: case 0x3:                                           // VCVTB/VCVTT: half precision
-        case 0xA: case 0xB: case 0xE: case 0xF:                       // VCVT fixed point
         default:
             return false;
     }

@@ -11,11 +11,11 @@ Working notes for picking the project back up. The README says what the emulator
     sh tests/run_busybox.sh      # 10 cases, against the host's own md5sum/sha256sum
     sh tests/run_python.sh       #  6 cases, a stock dynamically linked CPython 3.12
     sh tests/run_gcc.sh          #  4 cases, gcc compiling and the result running
-    sh tests/run_rpi.sh          #  8 cases, Raspberry Pi OS's own glibc/python/gcc
+    sh tests/run_rpi.sh          #  9 cases, Raspberry Pi OS's own glibc/python/gcc
     node web/test_node.mjs       #  7 cases, the same guests inside WebAssembly
     node web/test_pages.mjs      #  6 cases, the same again from the deployed URL
 
-All seven should be green (18 / 10 / 6 / 4 / 8 / 7 / 6). They are the whole quality argument, and
+All seven should be green (18 / 10 / 6 / 4 / 9 / 7 / 6). They are the whole quality argument, and
 they are differential rather than expectational: the host computes the same answers
 from the same sources, so "the emulator is right" means "it produced the host's
 bytes".
@@ -213,12 +213,44 @@ manoeuvre in question.
   instruction. A reference that computes and reports in one expression is a reference
   that can be wrong in a way the emulator cannot be.
 
-- **NEON is partial.** Implemented: the element and structure load/stores, the
-  three-registers-same group, the one-register modified immediates, the shift-by-
-  immediate group, the two-register miscellaneous group, VEXT, and the widening
-  three-different forms. Not implemented, and refused loudly: the parallel add/sub
-  groups, the saturating shifts, VTBL/VTBX, the polynomial multiplies, and the
-  by-scalar forms.
+- **NEON: what is still refused.** The saturating and rounding shifts (VQSHL,
+  VRSHL, VQRSHL, VQSHRN), the saturating doubling multiplies (VQDMULH, VQDMLAL and
+  friends), the polynomial multiplies, the by-scalar forms (A7.4.6), VRECPE/VRSQRTE,
+  the half-precision converts, and 64-bit lanes for the saturating and halving adds.
+  Each returns false and stops the machine with its encoding printed, which is the
+  address to go implement.
+
+## How the NEON gaps were found, and how to find the next ones
+
+Not by reading the manual: by making the guest's own compiler emit them.
+`tests/run_rpi.sh` builds one source twice with the emulated gcc -- `-O3 -mfpu=neon
+-ftree-vectorize` and `-O1 -fno-tree-vectorize` -- and requires the two runs to
+agree. gcc chooses the instructions, so coverage follows what a real compiler emits,
+and the scalar build is an oracle needing no host compiler.
+
+Adding a loop shape to `vec.c` inside that script is how to reach further. The four
+bugs it found on its first run were all silent:
+
+- **The three-registers-same-length group masked out bit 24**, which is `U`. The
+  signed half of NEON worked and the unsigned half was refused -- so the failure
+  looked like a missing instruction rather than a wrong group test.
+- **VQADD/VQSUB did not saturate and VHADD/VHSUB ignored signedness.** `vqsub.u8` is
+  how a compiler writes `a > b ? a - b : 0`; a wrapping subtract turns the clamp into
+  255-and-counting.
+- **VBSL read `Vn` as its mask instead of the destination.** VBSL's selector *is* the
+  destination register, so reading the wrong operand inverts every select -- the
+  difference appeared exactly where zero should have been.
+- **VMOVL halved its element size.** `imm6` already names the source element, so
+  deriving a "narrower" one from it widened bytes where halfwords were asked for.
+
+And one from the same session in VFP: the **fixed-point VCVT** was refused. Its
+immediate is not the fraction width -- it is that width subtracted from the container
+size, which is why the encoding reads as a large number for a small scale.
+
+The two-registers-miscellaneous (A, B) table was read out of the *assembler* rather
+than remembered: assemble each mnemonic, read the bits back. That group is a dozen
+operations picked by two small fields with no pattern, and the sibling project lost
+an evening to a zero-compare table whose opcodes were each off by one.
 - **A32's parallel add/sub (SADD8, UHSUB16 and the rest) is refused.** Nothing has
   needed it; glibc's string routines use NEON instead.
 - **`fork` is vfork semantics.** The parent is suspended until the child execs or

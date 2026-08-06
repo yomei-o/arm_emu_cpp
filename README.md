@@ -114,7 +114,7 @@ That is a scan loop in musl's `strtod` that never terminates.
 | **gcc 13 for armv7** — compiles, assembles and links, and the result runs here | ✅ |
 | **Raspberry Pi OS's own tree** — glibc 2.36, CPython 3.11, gcc 12 | ✅ |
 | **WebAssembly** — the same guests, in a browser tab | ✅ |
-| Advanced SIMD (NEON) | grown by demand: load/store, the three-same group, the immediates, shifts, the two-register misc group |
+| **Advanced SIMD (NEON)** — the three-same, wide/narrow, misc, shift, pairwise, immediate and table groups | ✅ |
 
 ## Correctness is a diff, not an opinion
 
@@ -206,8 +206,20 @@ ok   rpi python sha256 (against the host's)
 ok   rpi gcc compiles and links
 ok   rpi gcc output runs under the emulator
 ok   rpi gcc -mthumb (Thumb-2) output runs
-8 passed, 0 failed
+ok   rpi gcc -mfpu=neon output matches the scalar build
+9 passed, 0 failed
 ```
+
+That last case is the one that earns its keep. The emulated gcc compiles one source
+**twice** — with the vectoriser and NEON on, and with both off — and the two runs
+must agree. gcc picks the instructions, so the coverage follows what a real compiler
+emits rather than what someone thought to write down, and the scalar build is an
+oracle that needs no host compiler at all. It found four separate NEON bugs the first
+time it ran, every one of which produced a plausible number rather than a fault: the
+three-registers-same-length group masked out bit 24 — which is `U`, so the entire
+*unsigned* half of NEON was being refused; `VQADD`/`VQSUB` did not saturate; `VBSL`
+read `Vn` as its mask instead of the destination, inverting every select; and `VMOVL`
+halved its element size, widening bytes where it had been asked for halfwords.
 
 `run_rpi.sh` is Raspberry Pi OS's own tree — glibc 2.36, CPython 3.11, gcc 12, out of
 Raspbian's `.deb`s. It is not the Alpine suite with different filenames: glibc's ARM
