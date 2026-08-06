@@ -103,7 +103,17 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    const std::vector<uint8_t> file = read_file(argv[i]);
+    // The program can be named by its host path or by the path the *guest* would
+    // use. Both are natural: `armemu --root tree tree/bin/sh` is what a shell
+    // completes, and `armemu --root tree /bin/sh` is what the guest's own scripts
+    // say. Trying the host path first and the rooted one second costs one failed
+    // open and removes a papercut that otherwise reaches into every test script.
+    std::string prog_path = argv[i];
+    std::vector<uint8_t> file = read_file(prog_path.c_str());
+    if (file.empty() && !root.empty() && root != "." && prog_path[0] == '/') {
+        prog_path = root + prog_path;
+        file = read_file(prog_path.c_str());
+    }
     if (file.empty()) { std::fprintf(stderr, "armemu: cannot read %s\n", argv[i]); return 1; }
 
     Memory mem;
@@ -179,7 +189,7 @@ int main(int argc, char** argv) {
         if (!p.empty() && p[0] != '/') return "/" + p;
         return p;
     };
-    const std::string guest_exe = to_guest_path(argv[i]);
+    const std::string guest_exe = to_guest_path(prog_path);
 
     LoadedImage img;
     std::string err;
@@ -205,7 +215,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "armemu: %s needs the dynamic loader %s,\n"
                          "        which is not under --root %s\n",
-                         argv[i], img.interp.c_str(), root.c_str());
+                         prog_path.c_str(), img.interp.c_str(), root.c_str());
             return 1;
         }
         LoadedImage interp;

@@ -61,6 +61,10 @@ public:
     std::string readlink(const std::string& path) const;
 
     std::string host_path(const std::string& guest) const;
+    // One absolute, canonical guest path -- see the note in files.cpp. Public
+    // because a syscall layer that composes paths itself has to compose them in the
+    // spelling the inode hash will see.
+    std::string normalize(const std::string& guest) const;
     std::string cwd = "/";
 
 private:
@@ -80,7 +84,14 @@ private:
     };
 
     struct Entry {
-        std::FILE* fp = nullptr;
+        // Reference-counted, because `dup` shares a file *description*, not just a
+        // handle: the two descriptors share the position, and closing one must not
+        // close the file. Owning it from a single Entry and nulling the copy's
+        // pointer looks right until a guest does the ordinary thing --
+        // `fd2 = dup(fd); close(fd)` -- and is left holding a descriptor with
+        // nothing behind it. GNU ld does exactly that for every archive member it
+        // caches, so `gcc hello.c` failed at the link step with "Invalid seek".
+        std::shared_ptr<std::FILE> fp;
         std::shared_ptr<Pipe> pipe;
         bool writable = false;
         std::string path;

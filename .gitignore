@@ -24,3 +24,4 @@ tests/*.got
 # the repository unusable for the sake of saving one curl.
 guests/*
 !guests/README.md
+!guests/fixup.sh

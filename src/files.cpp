@@ -12,17 +12,48 @@ constexpr int64_t kENOENT = -2, kEBADF = -9, kEACCES = -13, kEINVAL = -22;
 // bits; the rest have to be matched by value, not by the host's <fcntl.h>.
 constexpr int kO_WRONLY = 01, kO_RDWR = 02, kO_CREAT = 0100, kO_TRUNC = 01000,
               kO_APPEND = 02000;
+
+// Defined further down with fill_stat, which is its other caller. A directory
+// listing and a stat of the same file have to agree about the inode, so both go
+// through this.
+uint64_t path_ino(const std::string& path);
 }  // namespace
 
-std::string Files::host_path(const std::string& guest) const {
+// Turn whatever the guest said into one absolute, canonical guest path: relative to
+// the cwd if it was relative, with "." dropped and ".." resolved -- and **clamped at
+// the guest root**, because `--root` is a chroot and "/.." is "/" inside one.
+//
+// The lexical resolution is not tidiness. `stat(".")` against `stat("..")` is how
+// libc's getcwd(3) recognises that it has reached the root: it walks upward
+// comparing (st_dev, st_ino) and stops when the two name the same file. Those inodes
+// are hashed from the path here, so without this "tree/." and "tree/.." hash
+// differently, the two are never equal, and getcwd walks out of the sysroot looking
+// for a root it will never reach.
+std::string Files::normalize(const std::string& guest) const {
     std::string p = guest;
-    if (!p.empty() && p[0] != '/') {                       // relative to the guest cwd
-        p = cwd == "/" ? "/" + p : cwd + "/" + p;
+    if (p.empty() || p[0] != '/') p = (cwd == "/" ? std::string("/") : cwd + "/") + p;
+    std::vector<std::string> parts;
+    size_t i = 1;
+    while (i <= p.size()) {
+        size_t j = p.find('/', i);
+        if (j == std::string::npos) j = p.size();
+        const std::string c = p.substr(i, j - i);
+        if (c == "..") { if (!parts.empty()) parts.pop_back(); }
+        else if (!c.empty() && c != ".") parts.push_back(c);
+        i = j + 1;
     }
+    std::string out;
+    for (const std::string& c : parts) { out += '/'; out += c; }
+    return out.empty() ? "/" : out;
+}
+
+std::string Files::host_path(const std::string& guest) const {
+    const std::string p = normalize(guest);
     if (root_.empty()) return p;
     std::string r = root_;
     while (!r.empty() && (r.back() == '/' || r.back() == '\\')) r.pop_back();
-    return r + p;
+    // "/" under a root is the root directory itself, not "root/".
+    return p == "/" ? r : r + p;
 }
 
 bool Files::is_dir(const std::string& path) const {
@@ -66,12 +97,12 @@ int64_t Files::open(const std::string& path, int flags, int mode) {
     else if ((flags & 3) == kO_WRONLY) m = (flags & kO_CREAT) ? "wb" : "r+b";
     else if ((flags & 3) == kO_RDWR) m = (flags & kO_CREAT) ? "w+b" : "r+b";
 
-    std::FILE* fp = std::fopen(hp.c_str(), m);
-    if (!fp && (flags & kO_CREAT)) fp = std::fopen(hp.c_str(), "w+b");
-    if (!fp) return kENOENT;
+    std::FILE* raw = std::fopen(hp.c_str(), m);
+    if (!raw && (flags & kO_CREAT)) raw = std::fopen(hp.c_str(), "w+b");
+    if (!raw) return kENOENT;
     const int fd = next_fd_++;
     Entry e;
-    e.fp = fp;
+    e.fp = std::shared_ptr<std::FILE>(raw, [](std::FILE* f) { if (f) std::fclose(f); });
     e.path = hp;
     e.used = true;
     open_[fd] = std::move(e);
@@ -81,7 +112,8 @@ int64_t Files::open(const std::string& path, int flags, int mode) {
 int64_t Files::close(int fd) {
     auto it = open_.find(fd);
     if (it == open_.end()) return kEBADF;
-    if (it->second.fp) std::fclose(it->second.fp);
+    // The FILE* is closed by the last reference going away, not here: another
+    // descriptor may still hold it.
     if (it->second.pipe) {
         // Which end is closing matters: a reader that sees no writers left is at
         // end of file, and a reader that sees one is merely waiting.
@@ -114,8 +146,8 @@ int64_t Files::dup(int oldfd, int newfd) {
     else return newfd;                              // dup2(fd, fd) is a no-op
     Entry e = it->second;
     if (e.pipe) { if (e.writable) ++e.pipe->writers; else ++e.pipe->readers; }
-    e.fp = nullptr;                                 // only the original owns it
-    e.path = it->second.path;
+    // `e` is a copy, so the shared_ptr is copied with it and both descriptors now
+    // refer to the same open file -- which is what dup(2) means.
     open_[newfd] = std::move(e);
     if (newfd >= next_fd_) next_fd_ = newfd + 1;
     return newfd;
@@ -148,7 +180,10 @@ int64_t Files::getdents64(int fd, void* buf, uint64_t len) {
         const uint64_t reclen = (19 + name.size() + 1 + 7) & ~7ull;
         if (used + reclen > len) break;
         std::memset(out + used, 0, static_cast<size_t>(reclen));
-        const uint64_t ino = e.pos + 1;
+        // The same inode `stat` would report, not a sequence number: getcwd(3)'s
+        // fallback finds a directory's name by listing its parent and matching
+        // inodes, so a listing that invents them cannot be walked.
+        const uint64_t ino = path_ino(e.path + "/" + name);
         const int64_t off = static_cast<int64_t>(e.pos + 1);
         const uint16_t rl = static_cast<uint16_t>(reclen);
         const uint8_t type = e.entries[e.pos].second ? 4 : 8;   // DT_DIR : DT_REG
@@ -176,7 +211,7 @@ int64_t Files::read(int fd, void* dst, uint64_t len) {
         return static_cast<int64_t>(n);
     }
     if (!it->second.fp) return kEBADF;
-    return static_cast<int64_t>(std::fread(dst, 1, static_cast<size_t>(len), it->second.fp));
+    return static_cast<int64_t>(std::fread(dst, 1, static_cast<size_t>(len), it->second.fp.get()));
 }
 
 int64_t Files::write(int fd, const void* src, uint64_t len) {
@@ -189,12 +224,12 @@ int64_t Files::write(int fd, const void* src, uint64_t len) {
         return static_cast<int64_t>(len);
     }
     if (!it->second.fp) return kEBADF;
-    const size_t n = std::fwrite(src, 1, static_cast<size_t>(len), it->second.fp);
+    const size_t n = std::fwrite(src, 1, static_cast<size_t>(len), it->second.fp.get());
     // Flushed now, not at fclose -- because for a spawned child's descriptor there
     // *is* no fclose: the Files copies holding the FILE* go away without one. A
     // child that wrote its output through stdio buffering that nobody drains looks
     // like a child that wrote nothing.
-    std::fflush(it->second.fp);
+    std::fflush(it->second.fp.get());
     return static_cast<int64_t>(n);
 }
 
@@ -206,20 +241,20 @@ int64_t Files::lseek(int fd, int64_t off, int whence) {
     // FILE* -- is instant process death under MSVC's CRT, with no message.
     if (it->second.pipe) return -29;                   // ESPIPE
     if (it->second.is_directory || !it->second.fp) return -29;
-    if (std::fseek(it->second.fp, static_cast<long>(off),
+    if (std::fseek(it->second.fp.get(), static_cast<long>(off),
                    whence == 1 ? SEEK_CUR : whence == 2 ? SEEK_END : SEEK_SET) != 0)
         return kEINVAL;
-    return std::ftell(it->second.fp);
+    return std::ftell(it->second.fp.get());
 }
 
 int64_t Files::pread(int fd, void* dst, uint64_t len, uint64_t off) {
     auto it = open_.find(fd);
     if (it == open_.end()) return kEBADF;
     if (it->second.pipe || !it->second.fp) return -29;  // ESPIPE (see lseek)
-    const long save = std::ftell(it->second.fp);
-    std::fseek(it->second.fp, static_cast<long>(off), SEEK_SET);
-    const size_t got = std::fread(dst, 1, static_cast<size_t>(len), it->second.fp);
-    std::fseek(it->second.fp, save, SEEK_SET);
+    const long save = std::ftell(it->second.fp.get());
+    std::fseek(it->second.fp.get(), static_cast<long>(off), SEEK_SET);
+    const size_t got = std::fread(dst, 1, static_cast<size_t>(len), it->second.fp.get());
+    std::fseek(it->second.fp.get(), save, SEEK_SET);
     return static_cast<int64_t>(got);
 }
 
@@ -230,8 +265,14 @@ namespace {
 // for all of them, and relocation fails against a library that is sitting right
 // there.
 uint64_t path_ino(const std::string& path) {
+    // Normalised first, so that two spellings of one file hash the same. Without
+    // it "tree/usr/lib" and "tree/usr/lib/." are two different inodes, and every
+    // consumer of inode identity -- ld.so's "have I loaded this already", getcwd's
+    // walk -- gets a wrong answer that looks like something else entirely.
+    std::string p = std::filesystem::path(path).lexically_normal().generic_string();
+    while (p.size() > 1 && p.back() == '/') p.pop_back();
     uint64_t h = 1469598103934665603ull;
-    for (unsigned char ch : path) { h ^= ch; h *= 1099511628211ull; }
+    for (unsigned char ch : p) { h ^= ch; h *= 1099511628211ull; }
     return h ? h : 1;                                  // 0 reads as "no file"
 }
 

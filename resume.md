@@ -7,21 +7,38 @@ Working notes for picking the project back up. The README says what the emulator
 
     sh build.sh
     sh tests/run_tests.sh        # 16 cases: 8 sources x {ARM, Thumb}
-    # guests/README.md has the one curl that fetches busybox
+    # guests/README.md has the downloads for the three guest trees below
     sh tests/run_busybox.sh      # 10 cases, against the host's own md5sum/sha256sum
+    sh tests/run_python.sh       #  6 cases, a stock dynamically linked CPython 3.12
+    sh tests/run_gcc.sh          #  4 cases, gcc compiling and the result running
 
-Both should be green. They are the whole quality argument so far, and they are
-differential rather than expectational: the host computes the same answers from the
-same sources, so "the emulator is right" means "it produced the host's bytes".
+All four should be green (16 / 10 / 6 / 4). They are the whole quality argument, and
+they are differential rather than expectational: the host computes the same answers
+from the same sources, so "the emulator is right" means "it produced the host's
+bytes".
 
 **The goal.** A Raspberry Pi 32-bit ARM toolchain — `gcc`, `python3` and a `hello.c`
 compiled by the first and run by neither — on an x86 host and in a browser tab. That
 is the same shape the AArch64 sibling reached, one architecture generation back.
 
-**Where this is (2026-08-06, first pass).** The CPU is done in the sense that
-matters: Alpine's static armv7 busybox, a Thumb-2 binary end to end, produces the
-host's digests over a few hundred million instructions. What is left is breadth, not
-a wall.
+**Where this is (2026-08-06, first pass).** The goal it was aimed at is met, except
+for the browser:
+
+    ./armemu --root guests/sysroot /usr/bin/python3 \
+        -c "import sys, platform; print(sys.version.split()[0], platform.machine())"
+    3.12.13 armv7l
+
+    ./armemu --root guests/gccroot /usr/bin/gcc /hello.c -o /hello
+    ./armemu --root guests/gccroot /hello
+    hello from emulated gcc
+
+A stock CPython 3.12 for 32-bit ARM, dynamically linked, with its own
+`ld-musl-armhf.so.1` doing every relocation; four guest threads on one lock coming
+out at exactly 80,000; and gcc 13 forking cc1, as and ld and producing a binary that
+runs under the same interpreter. About 490 million instructions for the CPython
+digest case.
+
+What is left is **WebAssembly**, and breadth in NEON.
 
 ## Bugs from this stretch worth not rediscovering
 
@@ -109,30 +126,46 @@ progress looks exactly like one doing a lot of work, and sampling tells them apa
 seconds. When the PC is climbing by four per instruction through zeroed memory, the
 last in-image PC in the trace is the instruction that went wrong.
 
+## Two bugs the *guests* found, which the tests could not have
+
+Both are in the file layer rather than the CPU, and neither is ARM-specific — they
+are here because a real toolchain is the first thing that does the ordinary POSIX
+manoeuvre in question.
+
+- **`dup` shares a file *description*, not a handle.** The two descriptors share the
+  position, and closing one must not close the file. Owning the `FILE*` from a single
+  entry and nulling the copy's pointer looks right until a guest does
+  `fd2 = dup(fd); close(fd)` — GNU ld does exactly that for every archive member it
+  caches — and is left with a descriptor with nothing behind it. `gcc hello.c` failed
+  at the link step with "Invalid seek". `Files::Entry::fp` is a `shared_ptr` now.
+
+- **`(st_dev, st_ino)` has to be independent of how the path was spelled.** The inode
+  is an FNV hash of the host path, so `tree/usr/lib` and `tree/usr/lib/.` were two
+  different files. Everything that uses inode identity then gets a wrong answer that
+  looks like something else: ld.so's "have I loaded this already", and getcwd(3)'s
+  fallback, which walks upward comparing `stat(".")` against `stat("..")` and stops
+  when they match. `Files::normalize` resolves the path lexically and clamps `..` at
+  the guest root, because `--root` is a chroot.
+
 ## ⏭ Next, in order
 
-1. **Dynamic linking.** The loader already maps `PT_INTERP` and starts at the
-   interpreter's entry with AT_BASE set, exactly as the kernel does — the same path
-   the AArch64 sibling uses, where the guest's own `ld.so` does all the relocation.
-   It has not been exercised yet. The first guest to try is Alpine's dynamic busybox
-   with `ld-musl-armhf.so.1`, because it is the same program that already works
-   statically, so any difference is the loader's.
+1. **WebAssembly.** The last piece of the original goal. `web/wasm_api.cpp` and
+   `web/build.sh` in the AArch64 sibling are close to directly portable; the only
+   guest-visible difference is that there is no host filesystem, so the guest tree is
+   unpacked into emscripten's in-memory FS and the `Files` layer works unchanged
+   because `fopen` on a MEMFS path behaves like `fopen` anywhere else. The guest to
+   ship first is busybox (880 KB) and then the CPython sysroot (~60 MB, which the
+   sibling serves as a compressed tarball the page decompresses with
+   `DecompressionStream`).
 
-2. **CPython for armhf.** The sibling project's route was
-   `python-build-standalone`'s musl build, which is dynamically linked and therefore
-   depends on step 1. Expect a round of unimplemented NEON: `neon.cpp` is grown by
-   demand and stops with the encoding printed, which is the address to go implement.
+2. **Raspberry Pi OS's own binaries**, as opposed to Alpine's. Those are glibc and
+   ARMv6, which exercises two things musl and ARMv7 do not: glibc's IFUNC resolvers
+   pick string routines from AT_HWCAP (so the HWCAP word in `elf_loader.cpp` becomes
+   load-bearing rather than decorative), and ARMv6 code reaches the kernel helper page
+   for its atomics instead of using LDREX/STREX directly.
 
-3. **Raspberry Pi's gcc.** Alpine's armv7 packages give a real toolchain with no Pi
-   and no cross-compiler; the AArch64 sibling's `resume.md` has the package list and
-   the two traps (Windows `tar` drops the symlinks, so every soname has to be a
-   *copy*; and cc1 installs a SIGILL handler, so an unimplemented instruction becomes
-   "internal compiler error: Illegal instruction" with no PC — `--trace-sys` prints
-   the `[sig]` line and the faulting PC in it is what to implement).
-
-4. **WebAssembly.** `web/wasm_api.cpp` and `web/build.sh` in the sibling are close to
-   directly portable; the only guest-visible difference is that there is no host
-   filesystem, so the guest tree is unpacked into emscripten's in-memory FS.
+3. **Speed.** ~490 M instructions for the CPython digest case, which is a few tens of
+   seconds. A decode cache keyed on the PC is the standing idea; measure first.
 
 ## Also still open
 
