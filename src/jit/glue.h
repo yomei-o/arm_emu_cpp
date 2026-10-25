@@ -26,8 +26,8 @@ using GFault = arm::CpuError;
 #define JIT_ENV(n) "ARMEMU_" n
 
 constexpr int kCodeBits = 12;
-// This guest has no direct-mapped page cache for the wasm tier to probe inline; the
-// numbers are only here so the shared code compiles.
+// The page cache that the wasm and native tiers probe inline: 2^kTlbBits direct mapped
+// entries of {page number, host address}, indexed by (addr >> kTlbPageBits) & mask.
 constexpr int kTlbPageBits = 16;
 constexpr int kTlbBits = 10;
 
@@ -38,6 +38,8 @@ struct GuestSlots {
     int32_t rip = 0;       // the program counter
     int32_t tmp0 = 0;      // the first temporary
     int32_t ntmp = 0;      // how many temporaries
+    int32_t fl_n = 0, fl_z = 0, fl_c = 0, fl_v = 0;   // the NZCV flags, a byte each
+    int32_t thumb = 0;     // CPSR.T, a byte
 };
 
 // A guest's machine state as the verifier compares it.
@@ -77,8 +79,8 @@ struct Glue {
     static void wr32(GMemory& m, uint64_t a, uint32_t v) { m.write<uint32_t>(static_cast<uint32_t>(a), v); }
     static void wr64(GMemory& m, uint64_t a, uint64_t v) { m.write<uint64_t>(static_cast<uint32_t>(a), v); }
 
-    static const void* tlb_read_base(const GMemory&) { return nullptr; }
-    static const void* tlb_write_base(const GMemory&) { return nullptr; }
+    static const void* tlb_read_base(const GMemory& m) { return m.tlb_read_base(); }
+    static const void* tlb_write_base(const GMemory& m) { return m.tlb_write_base(); }
 
     static void take(const GCpu& c, GuestState& s);
     static void put(GCpu& c, const GuestState& s);

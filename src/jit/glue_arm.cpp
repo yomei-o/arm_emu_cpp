@@ -18,6 +18,11 @@ void Glue::fill_slots(GuestSlots& s, GCpu& cpu) {
     s.tmp0 = off(&cpu.jit_tmp[1]);
     s.ntmp = static_cast<int32_t>(sizeof(cpu.jit_tmp) / sizeof(cpu.jit_tmp[0])) - 1;
     s.rip = off(&cpu.pc);
+    s.fl_n = off(&cpu.n);
+    s.fl_z = off(&cpu.z);
+    s.fl_c = off(&cpu.c);
+    s.fl_v = off(&cpu.v);
+    s.thumb = off(&cpu.thumb);
 }
 
 void Glue::take(const GCpu& c, GuestState& s) {
