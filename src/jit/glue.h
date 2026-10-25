@@ -55,10 +55,11 @@ struct Glue {
     static void fill_slots(GuestSlots& s, GCpu& c);
 
     static uint64_t pc(const GCpu& c) { return static_cast<uint64_t>(static_cast<uint32_t>(c.pc)) | (c.thumb ? 1 : 0); }
-    static void set_pc(GCpu& c, uint64_t v) {
-        c.thumb = (v & 1) != 0;
-        c.pc = static_cast<uint32_t>(v & ~1ull);
-    }
+    // Writes the address only: the instruction set is whatever it was.  (Switching it is
+    // the interworking branch's job, A32Bx.)
+    static void set_pc(GCpu& c, uint64_t v) { c.pc = static_cast<uint32_t>(v & ~1ull); }
+    // A bounded run stops at an address whatever instruction set it is reached in.
+    static bool is_stop(uint64_t pc, uint64_t stop) { return (pc & ~1ull) == stop; }
     static uint64_t icount(const GCpu& c) { return c.insns; }
     static void add_icount(GCpu& c, uint64_t n) { c.insns += n; }
     static bool halted(const GCpu& c) { return c.halted || c.stop_requested; }

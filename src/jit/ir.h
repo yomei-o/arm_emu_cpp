@@ -77,6 +77,8 @@ namespace jit {
 //     conditional instructions that follow are skipped).
 //   A32Bx: interworking branch to slot a (bit 0 selects Thumb).
 //   A32Shift: d = a shifted by the low byte of slot b; cc = 0 LSL, 1 LSR, 2 ASR, 3 ROR.
+//   A32Skip: if cond(cc) does NOT hold, continue imm ops further on (an IT block's
+//     conditional instruction).  A block holding one is never compiled to WebAssembly.
 //   A32Ldm / A32Stm: load / store the registers r0..r14 in the list imm, from
 //     consecutive words starting at slot a + the offset c.  A32Ldm also loads the
 //     word for R15 into slot d when bit 15 of the list is set.  A32Stm with kFlagChk
@@ -89,7 +91,7 @@ namespace jit {
     X(Imul) X(ImulI) X(Group3) X(CcSet) X(CcSetI) X(CcMat) X(CcClear) X(JccCmp) X(JccCmpI) \
     X(Push) X(PushI) X(Pop) X(Ret) X(Call) \
     X(A64BinS) X(A64BinSI) X(A64Csel) X(A64Jcc) X(A64Ccmp) X(A64CcmpI) X(A64Sbfm) X(A64Bfm) X(A64Ubfm) \
-    X(A32Dp) X(A32DpI) X(A32Jcc) X(A32ExitIf) X(A32Bx) X(A32Shift) X(A32Ldm) X(A32Stm)
+    X(A32Dp) X(A32DpI) X(A32Jcc) X(A32ExitIf) X(A32Bx) X(A32Shift) X(A32Ldm) X(A32Stm) X(A32Skip)
 
 enum class OpKind : uint8_t {
 #define JIT_X(n) n,

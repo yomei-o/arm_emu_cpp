@@ -320,18 +320,22 @@ because ARM has no 64-bit divide instruction — are in `tests/harness.h`.
 
 ## The JIT
 
-ARM-state code runs through a small dynamic translator by default: a straight run of
-instructions becomes a short register-memory IR and then a chain of handlers, and a
-block is cached by its address. Anything it does not translate - VFP, NEON, the
-exclusives, status-register moves, saturating and parallel arithmetic - is handed
-back to the interpreter one instruction at a time, so the interpreter stays the
-specification and the translator only has to agree with it. Thumb code is not
-translated yet and runs in the interpreter as before.
+Code runs through a small dynamic translator by default, in ARM and in Thumb state: a
+straight run of instructions becomes a short register-memory IR and then a chain of
+handlers, and a block is cached by its address (with the Thumb bit). Anything it does
+not translate - VFP, NEON, the exclusives, status-register moves, saturating and
+parallel arithmetic, the rarer Thumb-2 encodings - is handed back to the interpreter
+one instruction at a time, so the interpreter stays the specification and the
+translator only has to agree with it.
 
-Every instruction is conditional, so a conditional one is preceded by an exit that
-leaves the block at the next instruction when the condition fails. Flags are kept
-exact (N, Z, C, V are the CPU's own bools after every flag-setting instruction), and
-flag writes that nothing reads are not computed.
+In ARM state every instruction is conditional, so a conditional one is preceded by an
+exit that leaves the block at the next instruction when the condition fails. In Thumb
+an IT block is translated as a whole - each covered instruction behind a "skip the
+next n ops unless the condition holds" op - unless one of them is something the
+translator leaves to the interpreter, in which case the whole IT block is
+interpreted, because the interpreter needs ITSTATE. Flags are kept exact (N, Z, C, V
+are the CPU's own bools after every flag-setting instruction), and flag writes that
+nothing reads are not computed.
 
     ARMEMU_JIT=0           interpreter only
     ARMEMU_JIT_VERIFY=1    run every block twice - translated, then interpreted from
@@ -339,9 +343,9 @@ flag writes that nothing reads are not computed.
     ARMEMU_JIT_STATS=N     print translation statistics every N blocks (and at exit)
     ARMEMU_JIT_PROFILE=1   add an op histogram and the hottest blocks to the statistics
 
-Stock Raspberry Pi OS CPython (the `rpi` guest) runs a pure-Python loop about 1.8x
-faster than the interpreter alone; `ARMEMU_JIT_VERIFY=1` over `tests/` and that
-CPython reports no differences.
+A pure-Python loop runs about 1.8x faster than the interpreter alone on Raspberry Pi
+OS's CPython (ARM state) and about 1.7x on Alpine's (Thumb-2); `ARMEMU_JIT_VERIFY=1`
+over `tests/`, busybox and both CPythons reports no differences.
 
 ## Two things about the ARM syscall interface that bite
 

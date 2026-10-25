@@ -112,6 +112,13 @@ const Uop* h_stm(Ctx* c, const Uop* u) {
     NEXT();
 }
 
+// The next `imm` ops belong to an IT-block instruction whose condition failed.
+const Uop* h_skip(Ctx* c, const Uop* u) {
+    if (cond_holds(c->cpu, u->cc)) NEXT();
+    const Uop* to = u + 1 + u->imm;
+    JUMP(to);
+}
+
 const Uop* h_bx(Ctx* c, const Uop* u) {
     c->cpu->bx_write_pc(static_cast<uint32_t>(S(u->a)));
     return nullptr;
@@ -126,6 +133,7 @@ Fn select_arm(const Op& o) {
         case OpKind::A32ExitIf: return h_exitif;
         case OpKind::A32Bx: return h_bx;
         case OpKind::A32Shift: return h_shift;
+        case OpKind::A32Skip: return h_skip;
         case OpKind::A32Ldm: return h_ldm;
         case OpKind::A32Stm: return h_stm;
         default: return nullptr;

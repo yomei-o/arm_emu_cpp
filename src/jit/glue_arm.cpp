@@ -103,9 +103,9 @@ void Cpu::maybe_enable_jit() {
     enable_jit(true);
 }
 
-// Thumb code is not translated yet; it runs in the interpreter.
+// A block starts between instructions, never inside an IT block.
 bool Cpu::jit_usable() const {
-    return jit_ && !thumb && !sample_every && !pc_watch && !mem_.strict && !mem_.watch_hi;
+    return jit_ && itstate == 0 && !sample_every && !pc_watch && !mem_.strict && !mem_.watch_hi;
 }
 
 bool Cpu::jit_run(uint64_t deadline, uint64_t stop_pc, const bool* yield) {
