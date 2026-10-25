@@ -15,12 +15,12 @@ CXX=${CXX:-g++}
 case "$(basename "$CXX")" in
     cl|cl.exe)
         "$CXX" -nologo -std:c++17 -O2 -EHsc -utf-8 -W3 -DNOMINMAX \
-               -D_CRT_SECURE_NO_WARNINGS -Isrc src/*.cpp -Fe:armemu.exe
+               -D_CRT_SECURE_NO_WARNINGS -Isrc src/*.cpp src/jit/*.cpp -Fe:armemu.exe
         echo "built armemu.exe"
         ;;
     *)
         CXXFLAGS=${CXXFLAGS:--std=c++17 -O2 -Wall -Wextra}
-        $CXX $CXXFLAGS -Isrc -o armemu src/*.cpp
+        $CXX $CXXFLAGS -Isrc -o armemu src/*.cpp src/jit/*.cpp
         echo "built armemu"
         ;;
 esac

@@ -1,9 +1,9 @@
 pool/main/g/glibc/libc6_2.36-9+rpi1+deb12u14_armhf.deb
 pool/main/g/gcc-12/libgcc-s1_12.2.0-14+rpi1+deb12u1_armhf.deb
 pool/main/c/coreutils/coreutils_9.1-1_armhf.deb
-pool/main/p/python3.11/python3.11_3.11.2-6+deb12u8_armhf.deb
-pool/main/p/python3.11/python3.11-minimal_3.11.2-6+deb12u8_armhf.deb
-pool/main/e/expat/libexpat1_2.5.0-1+deb12u2_armhf.deb
+pool/main/p/python3.11/python3.11_3.11.2-6%2Bdeb12u9_armhf.deb
+pool/main/p/python3.11/python3.11-minimal_3.11.2-6%2Bdeb12u9_armhf.deb
+pool/main/e/expat/libexpat1_2.5.0-1%2Bdeb12u5_armhf.deb
 pool/main/z/zlib/zlib1g_1.2.13.dfsg-1_armhf.deb
 pool/main/libf/libffi/libffi8_3.4.4-1_armhf.deb
 pool/main/g/gcc-12/gcc-12_12.2.0-14+rpi1+deb12u1_armhf.deb
@@ -12,10 +12,10 @@ pool/main/b/binutils/binutils_2.40-2+rpi2_armhf.deb
 pool/main/b/binutils/binutils-common_2.40-2+rpi2_armhf.deb
 pool/main/b/binutils/binutils-arm-linux-gnueabihf_2.40-2+rpi2_armhf.deb
 pool/main/g/glibc/libc6-dev_2.36-9+rpi1+deb12u14_armhf.deb
-pool/main/p/python3.11/libpython3.11-minimal_3.11.2-6+deb12u8_armhf.deb
-pool/main/p/python3.11/libpython3.11-stdlib_3.11.2-6+deb12u8_armhf.deb
+pool/main/p/python3.11/libpython3.11-minimal_3.11.2-6%2Bdeb12u9_armhf.deb
+pool/main/p/python3.11/libpython3.11-stdlib_3.11.2-6%2Bdeb12u9_armhf.deb
 pool/main/b/bzip2/libbz2-1.0_1.0.8-5+b2_armhf.deb
-pool/main/x/xz-utils/liblzma5_5.4.1-1+deb12u1_armhf.deb
+pool/main/x/xz-utils/liblzma5_5.4.1-1%2Bdeb12u2_armhf.deb
 pool/main/s/sqlite3/libsqlite3-0_3.40.1-2+deb12u2_armhf.deb
 pool/main/r/readline/libreadline8_8.2-1.3_armhf.deb
 pool/main/n/ncurses/libncursesw6_6.4-4_armhf.deb
@@ -31,7 +31,7 @@ pool/main/b/binutils/libctf-nobfd0_2.40-2+rpi2_armhf.deb
 pool/main/j/jansson/libjansson4_2.14-2_armhf.deb
 pool/main/m/mpdecimal/libmpdec3_2.5.1-2+rpi1_armhf.deb
 pool/main/u/util-linux/libuuid1_2.38.1-5+deb12u3_armhf.deb
-pool/main/o/openssl/libssl3_3.0.20-1~deb12u2_armhf.deb
+pool/main/o/openssl/libssl3_3.0.22-1~deb12u1_armhf.deb
 pool/main/g/gdbm/libgdbm6_1.23-3_armhf.deb
 pool/main/g/gdbm/libgdbm-compat4_1.23-3_armhf.deb
 pool/main/libn/libnsl/libnsl2_1.3.0-2_armhf.deb

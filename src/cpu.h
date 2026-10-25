@@ -35,6 +35,10 @@
 #include <string>
 #include "memory.h"
 
+namespace jit {
+class Engine;
+}
+
 namespace arm {
 
 struct CpuError {
@@ -154,15 +158,30 @@ inline ShiftResult thumb_expand_imm_c(uint32_t imm12, bool carry_in) {
     return {r, (r >> 31) != 0};
 }
 
+// A 32-bit register held in a 64-bit cell.  The translator (src/jit) addresses guest
+// registers as 8-byte slots, so the register file is laid out that way; everything
+// else sees an ordinary uint32_t - reads convert to one, writes narrow to one - which
+// keeps the interpreter's arithmetic exactly what it was.  The upper half is always
+// zero.
+struct R32 {
+    uint64_t v = 0;
+    operator uint32_t() const { return static_cast<uint32_t>(v); }
+    R32& operator=(uint32_t x) { v = x; return *this; }
+    R32& operator+=(uint32_t x) { v = static_cast<uint32_t>(v + x); return *this; }
+};
+
 class Cpu {
 public:
     explicit Cpu(Memory& mem) : mem_(mem) {}
+    ~Cpu();
+    Cpu(const Cpu&) = delete;
+    Cpu& operator=(const Cpu&) = delete;
 
     // r[15] exists as storage but is never the truth: the PC lives in `pc`, and
     // every read of R15 goes through pc_val(). Keeping the slot means LDM/STM
     // register lists can be walked without a special case at index 15.
-    uint32_t r[16] = {0};
-    uint32_t pc = 0;                 // address of the *next* instruction to fetch
+    R32 r[16];
+    R32 pc;                          // address of the *next* instruction to fetch
     bool n = false, z = false, c = false, v = false, q = false;
     uint32_t ge = 0;                 // CPSR GE[3:0], written by the parallel adds
     bool thumb = false;              // CPSR.T
@@ -355,10 +374,46 @@ public:
     bool stop_requested = false;
     std::function<void()> on_stop_requested;
 
+    // ---- dynamic translation (src/jit) -------------------------------------------
+    //
+    // Temporaries for translated blocks.  They sit in the CPU so that a block addresses
+    // them the way it addresses registers: as an offset from r[0] (r[] is 8-byte cells
+    // for exactly that reason).  Slot 0 is never written and always reads zero.
+    uint64_t jit_tmp[48] = {};
+    // Starts / stops the translator.  Off, nothing changes.
+    void enable_jit(bool on);
+    bool jit_on() const { return jit_ != nullptr; }
+    // Whether translated execution may be used right now: not in the middle of an IT
+    // block, and not while sampling, watching a pc or an address, or in strict mode.
+    bool jit_usable() const;
+    // Runs translated blocks until `deadline` instructions have executed, pc reaches
+    // `stop_pc`, the guest halts, `*yield` becomes true or pc is somewhere the
+    // translator will not go.  False: nothing ran, step().
+    bool jit_run(uint64_t deadline, uint64_t stop_pc, const bool* yield);
+
     void run() { run_until(0, false); }
     void run_until(uint32_t stop_pc, bool bounded = true) {
+        if (!jit_checked_) maybe_enable_jit();
         for (;;) {
             while (!halted && !stop_requested && !(bounded && pc == stop_pc)) {
+                if (jit_ && jit_usable()) {
+                    const uint64_t before = insns;
+                    // Blocks run many instructions between looks at the counters, so the
+                    // preemption count is spent in bulk afterwards.
+                    const uint64_t deadline = preempt_left ? insns + preempt_left : ~0ull;
+                    if (jit_run(deadline, bounded ? stop_pc : ~0ull, &stop_requested)) {
+                        if (preempt_left) {
+                            const uint64_t ran = insns - before;
+                            if (ran >= preempt_left) {
+                                preempt_left = preempt_every;
+                                if (on_preempt) on_preempt();
+                            } else {
+                                preempt_left -= ran;
+                            }
+                        }
+                        continue;
+                    }
+                }
                 step();
                 if (preempt_left && --preempt_left == 0) {
                     preempt_left = preempt_every;
@@ -377,6 +432,13 @@ public:
 
     Memory& mem() { return mem_; }
     uint32_t cur_pc() const { return cur_pc_; }
+
+private:
+    void maybe_enable_jit();
+    jit::Engine* jit_ = nullptr;
+    bool jit_checked_ = false;
+    friend class jit::Engine;
+public:
 
     [[noreturn]] void fail(const std::string& why, uint32_t insn) const;
     // An instruction the decoder does not implement: offer it to the host as SIGILL
