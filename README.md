@@ -343,9 +343,13 @@ nothing reads are not computed.
     ARMEMU_JIT_STATS=N     print translation statistics every N blocks (and at exit)
     ARMEMU_JIT_PROFILE=1   add an op histogram and the hottest blocks to the statistics
 
-A pure-Python loop runs about 1.8x faster than the interpreter alone on Raspberry Pi
-OS's CPython (ARM state) and about 1.7x on Alpine's (Thumb-2); `ARMEMU_JIT_VERIFY=1`
-over `tests/`, busybox and both CPythons reports no differences.
+Blocks that have run 30 times become machine code (x86-64 and AArch64 hosts;
+`ARMEMU_JIT_NATIVE=0` turns that tier off, `ARMEMU_JIT_NATIVE_HOT=N` moves the threshold):
+the flag-setting data processing, conditional exits and branches, shifts, LDM/STM and the
+interworking branch are generated as code; the page cache is probed inline. A pure-Python loop
+runs about 8x faster than the interpreter alone on Raspberry Pi OS's CPython (ARM state) and
+about 3x on Alpine's (Thumb-2), on an ARM64 host; `ARMEMU_JIT_VERIFY=1` over `tests/`, busybox
+and both CPythons reports no differences.
 
 ## Two things about the ARM syscall interface that bite
 
